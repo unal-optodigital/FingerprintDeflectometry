@@ -12,10 +12,13 @@ from queue import Queue, Empty
 from vmbpy import *
 import os
 import time
+import matplotlib as mpl
+mpl.rcParams['toolbar'] = 'none'
 
-cam = None                      # variable for contolling camera features
-vmb = None                     # vimba system
 
+##-- global variables for camera and vimba context
+cam = None                  
+vmb = None                  
 
 def fringe_generator(freq_ini: int, screen_width: int, screen_height: int):
     """
@@ -110,8 +113,8 @@ def phase_compensation(wrappedphase):
     phase_image = 2*np.pi*wrappedphase/255 - np.pi # convertion to (-pi,pi] values
 
 
-    print("shape",np.shape(phase_image))
-    print("min max",np.min(phase_image), np.max(phase_image))
+    # print("shape",np.shape(phase_image))
+    # print("min max",np.min(phase_image), np.max(phase_image))
 
     # create a phasor to make the compensation
     complex_image = np.exp(2*np.pi*1j * phase_image)
@@ -184,7 +187,7 @@ def phase_compensation(wrappedphase):
     slider5.on_changed(update)
     plt.show()
 
-    print("coeff_values: ",slider_value1, slider_value2, slider_value3,slider_value4, slider_value5)
+    # print("coeff_values: ",slider_value1, slider_value2, slider_value3,slider_value4, slider_value5)
 
     # creation of the compensed phase with the adecuate polynomial coef values
     compensed = ((np.angle(np.multiply(np.exp(1j * phase_image),np.exp(1j * 2 * np.pi * polynomial(X, Y, slider_value1, slider_value2,slider_value3,slider_value4, slider_value5) / 0.4))))+np.pi)/(2*np.pi)*255
@@ -318,8 +321,8 @@ def monitor_info():
         
        
     except NameError:
-        print('No se detecto ningun monitor segundario')
-        sys.exit(1)          # termina el programa con código de salida 1
+        print('second screen not detected')
+        sys.exit(1)          # close the code
     
     return window_displacement, resize_window_height, resize_window_width
         
@@ -350,7 +353,7 @@ def positionate_camera():
     with VmbSystem.get_instance() as vmb:           # context of vimba
         cams = vmb.get_all_cameras()
         if not cams:
-            raise RuntimeError("No hay cámaras detectadas.")
+            raise RuntimeError("not detected cameras.")
         with cams[0] as cam:                        # opens the camera in the vimba context
     
             cam.start_streaming(frame_handler)
@@ -378,31 +381,40 @@ def positionate_camera():
                 cv2.destroyAllWindows()
 
 
-def init_camera():
+def init_camera(exposure_time: int = 50000, 
+                gain: int = 0, 
+                pixel_format: str = 'Mono8'):
     '''
-    Inicializa la cámara y establece los parámetros necesarios.
+    Initialize camera with exposure_time, gain, and pixel format.
     '''
     global cam
     global vmb
     if vmb is None:
-        vmb = vmbpy.VmbSystem.get_instance()  # Inicializar el sistema Vimba
+        vmb = vmbpy.VmbSystem.get_instance()  # INITIALIZE VIMBA CONTEXT
         vmb.__enter__()
-        cams = vmb.get_all_cameras()  # Obtener todas las cámaras disponibles
-        cam = cams[0]  # Seleccionar la primera cámara disponible
+        cams = vmb.get_all_cameras()  # LIST OF CAMERAS
+        cam = cams[0]  # SELECT THE FIRST CAMERA
         cam.__enter__()
 
-        # configuración de las características de la cámara
+        # ENABLE THE FEATURES CONTROL
     
         fr_enable = cam.get_feature_by_name('AcquisitionFrameRateEnable')
         fr_enable.set(True)
        
+        if exposure_time !=0:
+            cam.get_feature_by_name('ExposureAuto').set('Off')
+            cam.get_feature_by_name('ExposureTime').set(exposure_time)  # microseg---> 
+        else:
+            cam.get_feature_by_name('ExposureAuto').set('On')
 
-        cam.get_feature_by_name('ExposureAuto').set('Off')
-        cam.get_feature_by_name('ExposureTime').set(60000.0)  # microsegundos
         cam.get_feature_by_name('GainAuto').set('Off')
-        cam.get_feature_by_name('Gain').set(0.0)  
+        cam.get_feature_by_name('Gain').set(gain)  
         cam.get_feature_by_name('BalanceWhiteAuto').set('Off')
-        cam.set_pixel_format(PixelFormat.Mono8) 
+        if pixel_format == 'Mono8':
+            cam.set_pixel_format(PixelFormat.Mono8) 
+        elif pixel_format == 'RGB8':
+            cam.set_pixel_format(PixelFormat.Rgb8)
+
         frame_rate = cam.get_feature_by_name('AcquisitionFrameRate')
         max_posible_frame_rate = frame_rate.get_range()[1]
         try:
@@ -413,33 +425,20 @@ def init_camera():
 
 def close_camera():
     '''
-    Cierra la cámara correctamente.
+    The camera closes correctly.
     '''
     global cam
     global vmb
+    cam.set_pixel_format(PixelFormat.Mono8)
     cam.__exit__(None, None, None)
     vmb.__exit__(None, None, None)
 
 
 def create_folder(path_folder: str):
-
-
     """string with the path of the newfolder"""
     # Create the folder if doesn't exist 
     if not os.path.exists(path_folder):
         os.makedirs(path_folder)
-
-
-def display_pattern_second_screen(pattern, resize_w, resize_h, displacement):
-    """
-    display de sinusoidal pattern on second screen using the pattern input
-    """
-    # display the sinusoidal pattern on the second screen
-    cv2.imshow('pattern',pattern)
-    cv2.resizeWindow('pattern', resize_w, resize_h)
-    cv2.moveWindow('pattern', displacement,0)
-    cv2.waitKey(1)
-
 
 
 def phase_shifting_loop(cam, vmb, patterns_to_project, path_folder):
@@ -456,32 +455,57 @@ def phase_shifting_loop(cam, vmb, patterns_to_project, path_folder):
         cv2.imshow('pattern',((patterns_to_project[fringe_shift_counter])))
         cv2.waitKey(1)
         time.sleep(delay_camera_screen)
-
-        # to save image under uniform illumination
-        if fringe_shift_counter == 5:
-            cam.set_pixel_format(PixelFormat.Rgb8) 
-            frame = cam.get_frame()
-            frame = frame.as_numpy_ndarray()
-            frame = np.squeeze(frame)
-            cv2.imwrite(path_folder+f"/Phase_{fringe_shift_counter}color.png", frame)
-
+            
         # acquiring and saving the shifted-phase
         cam.set_pixel_format(PixelFormat.Mono8) 
         frame = cam.get_frame()
         frame = frame.as_numpy_ndarray()
         frame = np.squeeze(frame)
-        cv2.imwrite(path_folder + f"/Phase_{fringe_shift_counter}.png", frame)
+  
 
         # storing the frame for post-processing
         shifted_frames.append(frame)
         fringe_shift_counter +=1
 
         # finish at the sixth capture
-        if fringe_shift_counter == 6 :
+        if fringe_shift_counter == 6:
+            cam.set_pixel_format(PixelFormat.Rgb8) 
+            frame_color = cam.get_frame()
+            frame_color = frame_color.as_numpy_ndarray()
+            frame_color = np.squeeze(frame_color)
+            shifted_frames.append(frame_color)
+            cam.set_pixel_format(PixelFormat.Mono8)
             cv2.destroyAllWindows()
             break
+
     return shifted_frames
 
+
+def save_8_bit_images(array_of_images, path_folder: str):
+    """
+    save phase [-1], 
+    modulated intensity map[-2],
+    color image of the surface pos[-3],
+    save shifted frames[-4..-8],
+    un path_folder
+    """
+    phase = array_of_images.pop()
+    amplitude = array_of_images.pop()
+    color_image = array_of_images.pop()
+    if os.path.exists(path_folder):
+        
+        cv2.imwrite(path_folder+"/modulated_intensity_map.png", np.uint8(255*amplitude/np.max(amplitude)))
+        cv2.imwrite(path_folder+"/wrapped_phase.png",phase)
+        cv2.imwrite(path_folder+f"/color_image.png", color_image)
+
+        for i in range(0,len(array_of_images)):
+            cv2.imwrite(path_folder + f"/Phase_{i}.png", array_of_images[i])
+        # realización de la compensacion
+        compensation = input("Realize the phase compensation (yes) (no): ")
+        if compensation.lower() == "yes":
+            compensated_phase = phase_compensation(array_of_images[-1])
+            cv2.imwrite(path_folder+"/compensated_phase.png", np.uint8(255*compensated_phase/np.max(compensated_phase)))
+    print("Images succesfully saved")
 
 
 def run_camera_and_fringes_ui(
@@ -492,7 +516,7 @@ def run_camera_and_fringes_ui(
     pattern_resize_h: int,
     pattern_displacement_x: int = 1920,   # move 1920 pixels the second screen
     pattern_displacement_y: int = 0,
-    slider_fig_size=(3, 2)
+    slider_fig_size=(5, 2)
 ):
     """
     -Slider(freq, angle of fringes in main window)
@@ -513,24 +537,66 @@ def run_camera_and_fringes_ui(
     state = {
         'freq': float(freq_ini),
         'angle': 0.0,
+        'exposure_time': 20000.0,  # µs initial value (20 ms)
         'stop': False,
+        'cam': None,               
     }
 
     #  slider fig (Matplotlib)
-    fig_sliders, (ax_freq, ax_angle) = plt.subplots(2, 1, figsize=slider_fig_size)
-    plt.subplots_adjust(left=0.2, bottom=0.3, top=0.95)
+    fig_sliders, (ax_freq, ax_angle, ax_exp) = plt.subplots(3, 1, figsize=slider_fig_size)
+    plt.subplots_adjust(left=0.2, bottom=0.25, top=0.95, hspace=0.5)
     fig_sliders.canvas.manager.set_window_title('Fringe Controls')
+    mgr = fig_sliders.canvas.manager
+    try:
+        mgr.window.wm_geometry("+0+0")  # TkAgg
+    except Exception:
+        mgr.window.move(1000, 0)           # Qt5/Qt6
 
-    slider_freq = Slider(ax_freq, 'Frequency', valmin=0.0, valmax=5.0,
+    slider_freq = Slider(ax_freq, 'freq', valmin=0.0, valmax=5.0,
                          valinit=freq_ini, valstep=0.05)
-    slider_angle = Slider(ax_angle, 'Rotation', valmin=0.0, valmax=2*np.pi,
+    slider_angle = Slider(ax_angle, 'tilt', valmin=0.0, valmax=2*np.pi,
                           valinit=0.0, valstep=np.pi/4)
+    
+    # typical range
+    EXP_MIN_US, EXP_MAX_US, EXP_STEP_US = 50.0, 1_000_000.0, 100.0
+    slider_exp = Slider(ax_exp, 'ex_time [µs]', valmin=EXP_MIN_US, valmax=EXP_MAX_US,
+                        valinit=state['exposure_time'], valstep=EXP_STEP_US)
+
+    def _set_exposure_if_possible(cam_obj, exposure_us: float):
+        """set ExposureTime/ExposureTimeAbs in µs."""
+        if cam_obj is None:
+            return
+        # Clamp slider range
+        exposure_us = float(np.clip(exposure_us, EXP_MIN_US, EXP_MAX_US))
+        # autoexposure off
+        for ename in ('ExposureAuto',):
+            try:
+                feat = cam_obj.get_feature_by_name(ename)
+                try:
+                    feat.set('Off')
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        # by feature
+        for fname in ('ExposureTime', 'ExposureTimeAbs'):
+            try:
+                feat = cam_obj.get_feature_by_name(fname)
+                feat.set(exposure_us)
+                return
+            except Exception:
+                continue
 
     def on_change(_):
         state['freq'] = float(slider_freq.val)
         state['angle'] = float(slider_angle.val)
+        state['exposure_time'] = float(slider_exp.val)
+        if state['cam'] is not None:
+            _set_exposure_if_possible(state['cam'], state['exposure_time'])
+
     slider_freq.on_changed(on_change)
     slider_angle.on_changed(on_change)
+    slider_exp.on_changed(on_change)
 
     def on_close_matplotlib(event):
         state['stop'] = True
@@ -540,7 +606,6 @@ def run_camera_and_fringes_ui(
     plt.show(block=False)
 
     #  WINDOWS OpenCV (pattern and camera) 
-    # Ventana de franjas en segunda pantalla
     WIN_PATTERN = 'pattern'
     cv2.namedWindow(WIN_PATTERN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN_PATTERN, pattern_resize_w, pattern_resize_h)
@@ -549,7 +614,7 @@ def run_camera_and_fringes_ui(
     # camera window
     WIN_CAMERA = 'camera'
     cv2.namedWindow(WIN_CAMERA, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
-    cv2.setWindowProperty(WIN_CAMERA, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.resizeWindow(WIN_CAMERA, 1000, 1000)  
 
     # asynchronous for vimba
     q = Queue(maxsize=1)
@@ -559,7 +624,7 @@ def run_camera_and_fringes_ui(
         try:
             frame.convert_pixel_format(PixelFormat.Mono8)
             img = frame.as_opencv_image().copy()
-            # Dejar solo el más reciente
+            # most recent frame
             try:
                 q.get_nowait()
             except Empty:
@@ -568,15 +633,40 @@ def run_camera_and_fringes_ui(
         finally:
             stream.queue_frame(frame)
 
-    # context
+    # vimba context
     with VmbSystem.get_instance() as vmb:
         cams = vmb.get_all_cameras()
         if not cams:
             plt.close(fig_sliders)
             cv2.destroyAllWindows()
-            raise RuntimeError("no detected camera.")
+            raise RuntimeError("Verify the camera conection.")
 
         with cams[0] as cam:
+            # for slider changing in real time
+            state['cam'] = cam
+
+            # current exposure
+            current_exp = None
+            for fname in ('ExposureTime', 'ExposureTimeAbs'):
+                try:
+                    feat = cam.get_feature_by_name(fname)
+                    current_exp = float(feat.get())
+                    break
+                except Exception:
+                    continue
+            if current_exp is not None:
+                # in the range
+                if EXP_MIN_US <= current_exp <= EXP_MAX_US:
+                    slider_exp.set_val(current_exp)
+                    state['exposure_time'] = current_exp
+                else:
+                    # initial value of exposure
+                    _set_exposure_if_possible(cam, state['exposure_time'])
+            else:
+                # initial value
+                _set_exposure_if_possible(cam, state['exposure_time'])
+
+            # Init streaming
             cam.start_streaming(frame_handler)
 
             try:
@@ -596,8 +686,8 @@ def run_camera_and_fringes_ui(
 
                     # ==== fringes
                     coord_rot = X * np.cos(state['angle']) + Y * np.sin(state['angle'])
-                    patt = np.sin(2 * np.pi * state['freq'] * coord_rot)  # fase 0
-                    # Normalizar a 8 bits para visualización con OpenCV
+                    patt = np.sin(2 * np.pi * state['freq'] * coord_rot)  # phase 0
+                    # 8-bits
                     patt_u8 = ((patt - patt.min()) / (patt.max() - patt.min() + 1e-12) * 255.0).astype(np.uint8)
                     cv2.imshow(WIN_PATTERN, patt_u8)
 
@@ -610,6 +700,7 @@ def run_camera_and_fringes_ui(
 
             finally:
                 cam.stop_streaming()
+                state['cam'] = None
 
     # close the cv2 windows and matplotlib ones
     try:
@@ -621,10 +712,10 @@ def run_camera_and_fringes_ui(
     except Exception:
         pass
 
-    
     # generation of patterns
     freq_final = state['freq']
     angle_final = state['angle']
+    exposure_final_us = float(state['exposure_time'])  # 
     phase_shift = [0, np.pi/2, np.pi, 3*np.pi/2, 2*np.pi, 1]  # el "1" indicates uniform illumination
 
     projected_pattern = []
@@ -638,5 +729,7 @@ def run_camera_and_fringes_ui(
         else:
             # uniform illumination
             pat_uniform = np.sin(0 * coord_rot_final + np.pi/4)
-            projected_pattern.append(pat_uniform)  
-    return projected_pattern
+            projected_pattern.append(pat_uniform)
+
+    return projected_pattern, exposure_final_us
+
